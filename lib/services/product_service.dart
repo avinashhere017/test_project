@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, debugPrint, TargetPlatform;
 import 'package:http/http.dart' as http;
 
 import '../models/product_model.dart';
@@ -32,6 +34,28 @@ const Map<ProductSource, String> _openFactsBaseUrls = {
 
 class ProductService {
   static const _perSourceTimeout = Duration(seconds: 6);
+  static const _uploadTimeout = Duration(seconds: 20);
+
+  /// Set this to your dev machine's LAN IP (e.g. '192.168.1.23') when
+  /// testing on a physical device — it must be running the backend and
+  /// reachable on the same Wi-Fi network. Find it with `ipconfig` (Windows)
+  /// or `ifconfig` / `ip addr` (macOS/Linux). Leave null for an emulator or
+  /// web, which are handled automatically below.
+  static const String? _physicalDeviceBackendHost = '192.168.29.218';
+
+  /// Base URL of the backend that proxies uploads to Cloudinary and saves
+  /// items in MongoDB. Android emulators can't reach the host's `localhost`
+  /// directly, so they're pointed at the special `10.0.2.2` alias instead;
+  /// a physical device needs [_physicalDeviceBackendHost] set above.
+  static String get _backendBaseUrl {
+    if (_physicalDeviceBackendHost != null) {
+      return 'http://$_physicalDeviceBackendHost:5000/api';
+    }
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      return 'http://10.0.2.2:5000/api';
+    }
+    return 'http://localhost:5000/api';
+  }
 
   /// Fetches product details for [barcode]. If [source] is null (Auto),
   /// each source in [_autoSourceOrder] is tried in turn until one returns
@@ -99,15 +123,39 @@ class ProductService {
     return ProductModel.fromUpcItemDb(barcode, json);
   }
 
-  /// Stub upload for one complete item: barcode details plus both captured
-  /// photos, sent together. No backend endpoint is wired up yet; this
-  /// simulates a network call so the UI flow can be exercised end to end.
+  /// Uploads one complete item — barcode details plus both captured photos —
+  /// to the backend, which stores the photos in Cloudinary and the record in
+  /// MongoDB. Returns false on any non-2xx response or network failure.
   Future<bool> uploadItem({
     required ProductModel details,
     required File productPhoto,
     required File barcodePhoto,
   }) async {
-    await Future.delayed(const Duration(milliseconds: 1200));
-    return true;
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$_backendBaseUrl/items'),
+      )
+        ..fields['barcode'] = details.barcode
+        ..fields['name'] = details.name
+        ..fields['brand'] = details.brand
+        ..fields['quantity'] = details.quantity
+        ..fields['price'] = details.price
+        ..fields['source'] = details.source.label
+        ..fields['sourceImageUrl'] = details.imageUrl ?? ''
+        ..files.add(await http.MultipartFile.fromPath('productPhoto', productPhoto.path))
+        ..files.add(await http.MultipartFile.fromPath('barcodePhoto', barcodePhoto.path));
+
+      final streamedResponse = await request.send().timeout(_uploadTimeout);
+      final ok = streamedResponse.statusCode >= 200 && streamedResponse.statusCode < 300;
+      if (!ok) {
+        final body = await streamedResponse.stream.bytesToString();
+        debugPrint('uploadItem failed: HTTP ${streamedResponse.statusCode} — $body');
+      }
+      return ok;
+    } catch (e) {
+      debugPrint('uploadItem failed: $e');
+      return false;
+    }
   }
 }
