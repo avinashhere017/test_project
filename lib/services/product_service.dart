@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart'
-    show kIsWeb, defaultTargetPlatform, debugPrint, TargetPlatform;
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 
 import '../models/product_model.dart';
@@ -34,28 +33,20 @@ const Map<ProductSource, String> _openFactsBaseUrls = {
 
 class ProductService {
   static const _perSourceTimeout = Duration(seconds: 6);
-  static const _uploadTimeout = Duration(seconds: 20);
-
-  /// Set this to your dev machine's LAN IP (e.g. '192.168.1.23') when
-  /// testing on a physical device — it must be running the backend and
-  /// reachable on the same Wi-Fi network. Find it with `ipconfig` (Windows)
-  /// or `ifconfig` / `ip addr` (macOS/Linux). Leave null for an emulator or
-  /// web, which are handled automatically below.
-  static const String? _physicalDeviceBackendHost = '192.168.29.218';
+  // Generous because Render's free tier sleeps when idle, and the first
+  // request after a pause can take 30-60s while the service wakes up.
+  static const _uploadTimeout = Duration(seconds: 90);
 
   /// Base URL of the backend that proxies uploads to Cloudinary and saves
-  /// items in MongoDB. Android emulators can't reach the host's `localhost`
-  /// directly, so they're pointed at the special `10.0.2.2` alias instead;
-  /// a physical device needs [_physicalDeviceBackendHost] set above.
-  static String get _backendBaseUrl {
-    if (_physicalDeviceBackendHost != null) {
-      return 'http://$_physicalDeviceBackendHost:5000/api';
-    }
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:5000/api';
-    }
-    return 'http://localhost:5000/api';
-  }
+  /// items in MongoDB. Defaults to the deployed Render service; to test
+  /// against a backend running on your own machine, override it at launch:
+  /// `flutter run --dart-define=BACKEND_URL=http://192.168.1.23:5000/api`
+  /// (a plain-http LAN address must also be allowed in the debug-only
+  /// network_security_config.xml).
+  static const String _backendBaseUrl = String.fromEnvironment(
+    'BACKEND_URL',
+    defaultValue: 'https://product-scanner-backend.onrender.com/api',
+  );
 
   /// Fetches product details for [barcode]. If [source] is null (Auto),
   /// each source in [_autoSourceOrder] is tried in turn until one returns
